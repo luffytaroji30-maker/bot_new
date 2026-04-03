@@ -1,0 +1,5 @@
+.git
+*.txt
+users.json
+botconfig.json
+customsites.json
