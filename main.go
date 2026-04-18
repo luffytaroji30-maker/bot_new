@@ -108,9 +108,11 @@ func fetchAffordableSites(apiURL string, maxAmount float64) ([]WorkingSite, erro
 	var out []WorkingSite
 	seen := make(map[string]bool)
 
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+
 	for offset := 0; ; offset += pageSize {
 		pageURL := fmt.Sprintf("%s?limit=%d&offset=%d", apiURL, pageSize, offset)
-		resp, err := http.Get(pageURL)
+		resp, err := httpClient.Get(pageURL)
 		if err != nil {
 			if len(out) > 0 {
 				break // return what we have so far
@@ -1865,7 +1867,7 @@ func normalizeProxy(raw string) (string, error) {
 
 func testProxy(proxyURL string) error {
 	options := []tls_client.HttpClientOption{
-		tls_client.WithTimeoutSeconds(3),
+		tls_client.WithTimeoutSeconds(5),
 		tls_client.WithClientProfile(profiles.Chrome_124),
 		tls_client.WithProxyUrl(proxyURL),
 	}
