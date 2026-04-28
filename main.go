@@ -51,8 +51,9 @@ type CheckResult struct {
 	Currency   string
 	SiteName   string // shop domain without https://
 	ShopURL    string
-	Error      error // non-nil for StatusError / StatusDeclined
-	Retryable  bool  // true if a different store might succeed
+	Gateway    string // e.g. "Shopify Payments", "Stripe Donation"
+	Error      error  // non-nil for StatusError / StatusDeclined
+	Retryable  bool   // true if a different store might succeed
 }
 
 // ──────────────────────── Shopify JSON models ────────────────────────
