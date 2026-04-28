@@ -1145,7 +1145,7 @@ func main() {
 	btnGates := startMenu.Data("🔫 Gates", "gates")
 	btnPricing := startMenu.Data("💰 Pricing", "pricing")
 	btnHelp := startMenu.Data("📖 Help", "help")
-	btnUpdates := startMenu.URL("📢 Updates", "https://t.me/+YlKQr0JR-Uo2NTBk")
+	btnUpdates := startMenu.URL("📢 Updates", "NA")
 	startMenu.Inline(
 		startMenu.Row(btnGates, btnPricing),
 		startMenu.Row(btnHelp, btnUpdates),
