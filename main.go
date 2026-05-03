@@ -457,11 +457,15 @@ func extractActionsJSURL(checkoutHTML, shopURL string) string {
 }
 
 func extractProcessingJSURL(checkoutHTML, shopURL string) string {
-	// The PollForReceipt persisted query ID lives in a checkout-web JS bundle
-	// Try multiple patterns as Shopify changes file names
+	// The PollForReceipt persisted query ID lives in a checkout-web JS bundle.
+	// useHasOrdersFromMultipleShops is confirmed to contain it; other bundles are fallbacks.
 	patterns := []string{
+		// Confirmed to contain PollForReceipt hash
 		`(/cdn/shopifycloud/checkout-web/assets/c1/useHasOrdersFromMultipleShops[A-Za-z0-9_.-]*\.js)`,
 		`(/cdn/shopifycloud/checkout-web/assets/[A-Za-z0-9_/.-]*useHasOrdersFromMultipleShops[A-Za-z0-9_.-]*\.js)`,
+		// Fallbacks
+		`(/cdn/shopifycloud/checkout-web/assets/c1/page-Processing[A-Za-z0-9_.-]*\.js)`,
+		`(/cdn/shopifycloud/checkout-web/assets/c1/page-ThankYou[A-Za-z0-9_.-]*\.js)`,
 		`(/cdn/shopifycloud/checkout-web/assets/[A-Za-z0-9_/.-]*[Pp]rocessing[A-Za-z0-9_.-]*\.js)`,
 		`(/cdn/shopifycloud/checkout-web/assets/[A-Za-z0-9_/.-]*[Rr]eceipt[A-Za-z0-9_.-]*\.js)`,
 	}
@@ -473,6 +477,52 @@ func extractProcessingJSURL(checkoutHTML, shopURL string) string {
 		}
 	}
 	return ""
+}
+
+func extractProcessingJSURLs(checkoutHTML, shopURL string) []string {
+	// Return ALL candidate JS bundle URLs for PollForReceipt extraction,
+	// in priority order. useHasOrdersFromMultipleShops is confirmed first.
+	patterns := []string{
+		`(/cdn/shopifycloud/checkout-web/assets/c1/useHasOrdersFromMultipleShops[A-Za-z0-9_.-]*\.js)`,
+		`(/cdn/shopifycloud/checkout-web/assets/[A-Za-z0-9_/.-]*useHasOrdersFromMultipleShops[A-Za-z0-9_.-]*\.js)`,
+		`(/cdn/shopifycloud/checkout-web/assets/c1/page-Processing[A-Za-z0-9_.-]*\.js)`,
+		`(/cdn/shopifycloud/checkout-web/assets/c1/page-ThankYou[A-Za-z0-9_.-]*\.js)`,
+		`(/cdn/shopifycloud/checkout-web/assets/[A-Za-z0-9_/.-]*[Pp]rocessing[A-Za-z0-9_.-]*\.js)`,
+		`(/cdn/shopifycloud/checkout-web/assets/[A-Za-z0-9_/.-]*[Rr]eceipt[A-Za-z0-9_.-]*\.js)`,
+	}
+	seen := map[string]bool{}
+	var urls []string
+	for _, p := range patterns {
+		re := regexp.MustCompile(p)
+		for _, m := range re.FindAllStringSubmatch(checkoutHTML, -1) {
+			if len(m) >= 2 {
+				u := shopURL + m[1]
+				if !seen[u] {
+					seen[u] = true
+					urls = append(urls, u)
+				}
+			}
+		}
+	}
+	// Final fallback: include ALL checkout-web JS bundles not already added.
+	// Stores with renamed/restructured bundles still have the hash somewhere.
+	// Skip obvious non-query bundles (locale, polyfills, vendor css-only).
+	allRe := regexp.MustCompile(`(/cdn/shopifycloud/checkout-web/assets/[A-Za-z0-9_/.-]+\.js)`)
+	skip := regexp.MustCompile(`(?i)(locale-|polyfills|libphonenumber|qrcodegen|getCountryCallingCode|/css/|FullScreenBackground|component-[A-Z])`)
+	for _, m := range allRe.FindAllStringSubmatch(checkoutHTML, -1) {
+		if len(m) >= 2 {
+			u := shopURL + m[1]
+			if seen[u] {
+				continue
+			}
+			if skip.MatchString(m[1]) {
+				continue
+			}
+			seen[u] = true
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }
 
 func fetchActionsJS(client tls_client.HttpClient, actionsURL, shopURL string) (jsBody string, err error) {
@@ -557,7 +607,7 @@ func extractPollForReceiptID(jsBody string) string {
 }
 
 func extractReceiptID(submitBody string) string {
-	re := regexp.MustCompile(`"id"\s*:\s*"(gid://shopify/ProcessedReceipt/[0-9]+)"`)
+	re := regexp.MustCompile(`"id"\s*:\s*"(gid://shopify/ProcessedReceipt/[0-9a-zA-Z]+)"`)
 	m := re.FindStringSubmatch(submitBody)
 	if len(m) < 2 {
 		return ""
@@ -1750,6 +1800,13 @@ func checkSubmitErrors(status int, body string) {
 	}
 }
 
+// saveDebugResponse overwrites a fixed-name file with the latest response body.
+// Files are written to the current working directory for easy inspection.
+func saveDebugResponse(name, body string) {
+	fname := name + "_response.json"
+	_ = os.WriteFile(fname, []byte(body), 0644)
+}
+
 func extractReceiptStatusCode(pollBody, receiptType string) string {
 	if receiptType == "SuccessfulReceipt" || receiptType == "ProcessedReceipt" {
 		return "ORDER_PLACED"
@@ -1989,6 +2046,9 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 	buildID := extractCommitSha(checkoutHTML)
 	sourceToken := extractSourceToken(checkoutHTML)
 	if stableID == "" || buildID == "" || sourceToken == "" {
+		saveDebugResponse("checkout_html_step1", checkoutHTML)
+		fmt.Printf("  [ERR] Step1 missing: stableID=%v buildID=%v sourceToken=%v shop=%s\n",
+			stableID != "", buildID != "", sourceToken != "", shopURL)
 		result.Status = StatusError
 		result.Retryable = true
 		result.Error = fmt.Errorf("Step 1 failed: missing stableId, buildId, or sourceToken")
@@ -2034,8 +2094,33 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		result.Error = fmt.Errorf("Step 3 failed: missing Proposal or Submit ID")
 		return result, result.Error
 	}
-	// PollForReceipt persisted query ID is static across all Shopify stores
-	pollForReceiptID := "2db3246fa83390126a41952b21af3b97985d62dc7a45cb102d9e4b8784372e6a"
+
+	// Try to find PollForReceipt ID in the same actions JS first (newer Shopify bundles include it there).
+	// If not found, scan all candidate processing/receipt JS bundles in priority order.
+	pollForReceiptID := extractPollForReceiptID(jsBody)
+	if pollForReceiptID == "" {
+		processingURLs := extractProcessingJSURLs(checkoutHTML, shopURL)
+		tried := 0
+		for _, jsURL := range processingURLs {
+			pjs, errPJS := fetchActionsJS(client, jsURL, shopURL)
+			if errPJS != nil {
+				continue
+			}
+			tried++
+			if id := extractPollForReceiptID(pjs); id != "" {
+				pollForReceiptID = id
+				break
+			}
+		}
+		if pollForReceiptID == "" {
+			saveDebugResponse("checkout_html_no_pollid", checkoutHTML)
+			fmt.Printf("  [ERR] PollForReceipt not found. candidates=%d tried=%d shop=%s\n", len(processingURLs), tried, shopURL)
+			result.Status = StatusError
+			result.Retryable = true
+			result.Error = fmt.Errorf("%w: Step 3 failed: missing PollForReceipt ID (tried %d/%d bundles)", errStoreIncompatible, tried, len(processingURLs))
+			return result, result.Error
+		}
+	}
 
 	// Step 4
 	_, proposalBody, err := sendProposal(client, shopURL, checkoutURL, checkoutToken, sessionToken, stableID, variantID, price, proposalID, buildID, sourceToken, currency, country)
@@ -2044,6 +2129,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		result.Error = fmt.Errorf("Step 4 failed: %w", err)
 		return result, result.Error
 	}
+	saveDebugResponse("proposal", proposalBody)
 
 	if cur := extractSellerCurrency(proposalBody); cur != "" && cur != currency {
 		currency = cur
@@ -2073,6 +2159,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		result.Error = fmt.Errorf("Step 5 failed: %w", err)
 		return result, result.Error
 	}
+	saveDebugResponse("proposal2", proposal2Body)
 	queueToken2 := extractQueueToken(proposal2Body)
 	if queueToken2 == "" {
 		result.Status = StatusError
@@ -2088,6 +2175,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		result.Error = fmt.Errorf("Step 6 failed: %w", err)
 		return result, result.Error
 	}
+	saveDebugResponse("proposal3", proposal3Body)
 	queueToken3 := extractQueueToken(proposal3Body)
 	if queueToken3 == "" {
 		result.Status = StatusError
@@ -2103,6 +2191,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		result.Error = fmt.Errorf("Step 7 failed: %w", err)
 		return result, result.Error
 	}
+	saveDebugResponse("proposal4", proposal4Body)
 	queueToken4 := extractQueueToken(proposal4Body)
 	if queueToken4 == "" {
 		result.Status = StatusError
@@ -2119,6 +2208,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		return result, result.Error
 	}
 	_ = proposal5Status
+	saveDebugResponse("proposal5", proposal5Body)
 
 	// Step 9
 	identSig := extractIdentificationSignature(checkoutHTML)
@@ -2135,6 +2225,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		result.Error = fmt.Errorf("Step 9 failed: %w", err)
 		return result, result.Error
 	}
+	saveDebugResponse("pci_session", pciBody)
 
 	pciSessionID := extractPCISessionID(pciBody)
 	if pciSessionID == "" {
@@ -2198,6 +2289,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		result.Error = fmt.Errorf("Step 10 failed: %w", err)
 		return result, result.Error
 	}
+	saveDebugResponse("submit", submitBody)
 	checkSubmitErrors(submitStatus, submitBody)
 
 	receiptID := extractReceiptID(submitBody)
@@ -2236,6 +2328,18 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		statusCode := extractReceiptStatusCode(pollBody, receiptType)
 		result.StatusCode = statusCode
 
+		saveDebugResponse(fmt.Sprintf("poll%d", pollNum), pollBody)
+		fmt.Printf("  [POLL %d] receiptType=%q statusCode=%q\n", pollNum, receiptType, statusCode)
+
+		// Detect GraphQL schema mismatch (store running incompatible Shopify version) — retry on another site
+		if receiptType == "" && strings.Contains(pollBody, `"errors"`) && strings.Contains(pollBody, "undefinedField") {
+			result.Status = StatusError
+			result.StatusCode = "SCHEMA_MISMATCH"
+			result.Retryable = true
+			result.Error = fmt.Errorf("%w: poll %d: GraphQL schema mismatch on this store", errStoreIncompatible, pollNum)
+			return result, result.Error
+		}
+
 		if receiptType == "SuccessfulReceipt" || receiptType == "ProcessedReceipt" {
 			fmt.Printf("  Poll %d Response:\n%s\n", pollNum, pollBody)
 			result.Status = StatusCharged
@@ -2259,7 +2363,6 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 				errorCode = "FAILED"
 			}
 
-			// GENERIC_ERROR, InventoryReservationFailure are site-specific — retry on another site
 			switch errorCode {
 			case "INSUFFICIENT_FUNDS":
 				result.Status = StatusApproved
@@ -2271,10 +2374,9 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 				result.Error = fmt.Errorf("declined: %s", errorCode)
 				return result, result.Error
 			case "GENERIC_ERROR":
-				result.Status = StatusError
+				result.Status = StatusDeclined
 				result.StatusCode = errorCode
-				result.Retryable = true
-				result.Error = fmt.Errorf("retryable: %s", errorCode)
+				result.Error = fmt.Errorf("declined: %s", errorCode)
 				return result, result.Error
 			default:
 				// Check for InventoryReservationFailure (no code field)
@@ -2301,9 +2403,9 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 		}
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 
-		if pollNum >= 30 {
+		if pollNum >= 60 {
 			result.Status = StatusError
-			result.Error = fmt.Errorf("exceeded 30 poll attempts")
+			result.Error = fmt.Errorf("exceeded 60 poll attempts")
 			return result, result.Error
 		}
 	}
