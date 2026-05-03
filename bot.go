@@ -538,7 +538,7 @@ func formatWelcomeCard(uid int64, username string, proxyCount int) string {
 		em(emojiUser, "👤") + " <b>User</b> → @" + username + "\n" +
 		em(emojiStar, "⭐") + " <b>Bot</b> → CC Checker\n" +
 		em(emojiCalendar, "📅") + " <b>Proxies</b> → " + strconv.Itoa(proxyCount) + " loaded\n" +
-		em(emojiLightning, "⚡") + " <b>Owner</b> → @velorsi\n" +
+		em(emojiLightning, "⚡") + " <b>Owner</b> → @yoyo_xd\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -586,7 +586,7 @@ func formatPricingMsg() string {
 		"Price ↬ DM\n" +
 		"Credits ↬ Unlimited until plan ends\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"DM ↬ @velorsi"
+		"DM ↬ @yoyo_xd"
 }
 
 func formatStartMsg() string {
@@ -622,7 +622,7 @@ func formatStartMsg() string {
 		em(emojiCmdActive, "👥") + "  /active\n" +
 		"     ∟ See all users currently\n       checking with live progress\n\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━\n" +
-		"  " + em(emojiPwr, "⚡") + " 𝗣𝗼𝘄𝗲𝗿𝗲𝗱 𝗯𝘆 @velorsi " + em(emojiPwrStart, "⚡") + "\n" +
+		"  " + em(emojiPwr, "⚡") + " 𝗣𝗼𝘄𝗲𝗿𝗲𝗱 𝗯𝘆 @yoyo_xd " + em(emojiPwrStart, "⚡") + "\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -651,7 +651,7 @@ func formatProgressMsg(s *CheckSession) string {
 		em(emojiWarn, "⚠️") + " <b>Error Cards</b> ⇒ <b>" + strconv.Itoa(errors) + "</b>\n" +
 		em(emojiClock, "⏱") + " <b>Time</b> ⇒ <b>" + fmt.Sprintf("%.1fs", elapsed.Seconds()) + "</b> " + em(emojiClock, "⏱") + "\n" +
 		em(emojiUser, "👤") + " <b>Check By</b> ⇒ <b>@" + s.Username + "</b>\n" +
-		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @velorsi"
+		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @yoyo_xd"
 }
 
 func formatCompletedMsg(s *CheckSession) string {
@@ -679,7 +679,7 @@ func formatCompletedMsg(s *CheckSession) string {
 		em(emojiWarn, "⚠️") + " <b>Error Cards</b> ⇒ <b>" + strconv.Itoa(errors) + "</b>\n" +
 		em(emojiClock, "⏱") + " <b>Time</b> ⇒ <b>" + fmt.Sprintf("%.1fs", elapsed.Seconds()) + "</b> " + em(emojiClock, "⏱") + "\n" +
 		em(emojiUser, "👤") + " <b>Check By</b> ⇒ <b>@" + s.Username + "</b>\n" +
-		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @velorsi"
+		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @yoyo_xd"
 }
 
 func formatChargedMsg(card string, bin *BINInfo, r *CheckResult, username, proxyURL string) string {
@@ -706,7 +706,7 @@ func formatChargedMsg(card string, bin *BINInfo, r *CheckResult, username, proxy
 		em(emojiBank, "🏦") + " <b>Bank</b> ⇒ <b>" + bin.Bank + "</b>\n" +
 		em(emojiGlobe, "🌍") + " <b>Country</b> ⇒ <b>" + bin.Country + "</b> " + bin.CountryFlag + "\n\n" +
 		em(emojiUser, "👤") + " <b>User</b> ⇒ <b>@" + username + "</b>\n" +
-		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @velorsi / " + em(emojiGlobe, "🌐") + " <b>Px</b> ⇒ " + px
+		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @yoyo_xd / " + em(emojiGlobe, "🌐") + " <b>Px</b> ⇒ " + px
 }
 
 func formatApprovedMsg(card string, bin *BINInfo, r *CheckResult, username, proxyURL string) string {
@@ -734,7 +734,7 @@ func formatApprovedMsg(card string, bin *BINInfo, r *CheckResult, username, prox
 		em(emojiBank, "🏦") + " <b>Bank</b> ⇒ <b>" + bin.Bank + "</b>\n" +
 		em(emojiGlobe, "🌍") + " <b>Country</b> ⇒ <b>" + bin.Country + "</b> " + bin.CountryFlag + "\n\n" +
 		em(emojiUser, "👤") + " <b>User</b> ⇒ <b>@" + username + "</b>\n" +
-		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @velorsi / " + em(emojiGlobe, "🌐") + " <b>Px</b> ⇒ " + px
+		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @yoyo_xd / " + em(emojiGlobe, "🌐") + " <b>Px</b> ⇒ " + px
 }
 
 func formatDeclinedMsg(card string, bin *BINInfo, r *CheckResult, username, proxyURL string) string {
@@ -756,7 +756,7 @@ func formatDeclinedMsg(card string, bin *BINInfo, r *CheckResult, username, prox
 		em(emojiBank, "🏦") + " <b>Bank</b> ⇒ <b>" + bin.Bank + "</b>\n" +
 		em(emojiGlobe, "🌍") + " <b>Country</b> ⇒ <b>" + bin.Country + "</b> " + bin.CountryFlag + "\n\n" +
 		em(emojiUser, "👤") + " <b>User</b> ⇒ <b>@" + username + "</b>\n" +
-		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @velorsi / " + em(emojiGlobe, "🌐") + " <b>Px</b> ⇒ " + px
+		em(emojiLightning, "⚡") + " <b>Owner</b> ⇒ @yoyo_xd / " + em(emojiGlobe, "🌐") + " <b>Px</b> ⇒ " + px
 }
 
 func formatActiveMsg() string {
@@ -811,7 +811,7 @@ func formatActiveMsg() string {
 		sb.WriteString("│                           │\n")
 	}
 	sb.WriteString("└───────────────────────┘\n\n")
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━\n  " + em(emojiPwr, "⚡") + " 𝗣𝗼𝘄𝗲𝗿𝗲𝗱 𝗯𝘆 @velorsi\n━━━━━━━━━━━━━━━━━━━━━━")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━\n  " + em(emojiPwr, "⚡") + " 𝗣𝗼𝘄𝗲𝗿𝗲𝗱 𝗯𝘆 @yoyo_xd\n━━━━━━━━━━━━━━━━━━━━━━")
 	return sb.String()
 }
 
@@ -852,7 +852,7 @@ func formatStatsMsg(um *UserManager) string {
 		fmt.Sprintf("    "+em(emojiPctAppr, "✅")+" Approved: %.1f%%\n", approvedRate) +
 		fmt.Sprintf("    "+em(emojiRowCard, "💳")+" Charged:  %.1f%%\n\n", chargedRate) +
 		"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-		"  " + em(emojiPwr, "⚡") + " 𝗣𝗼𝘄𝗲𝗿𝗲𝗱 𝗯𝘆 @velorsi " + em(emojiPwrStats, "⚡") + "\n" +
+		"  " + em(emojiPwr, "⚡") + " 𝗣𝗼𝘄𝗲𝗿𝗲𝗱 𝗯𝘆 @yoyo_xd " + em(emojiPwrStats, "⚡") + "\n" +
 		"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -1102,9 +1102,10 @@ func main() {
 	// Load custom sites
 	loadCustomSites()
 
-	// Refresh site pool in background
+	// Populate site pool now (blocking) so first check never gets 0 sites
+	refreshSitePool()
+	// Then keep refreshing in background every 5 minutes
 	go func() {
-		refreshSitePool()
 		for {
 			time.Sleep(5 * time.Minute)
 			refreshSitePool()
@@ -1145,7 +1146,7 @@ func main() {
 	btnGates := startMenu.Data("🔫 Gates", "gates")
 	btnPricing := startMenu.Data("💰 Pricing", "pricing")
 	btnHelp := startMenu.Data("📖 Help", "help")
-	btnUpdates := startMenu.URL("📢 Updates", "https://t.me/+89lKTv0c4zNhOWY0")
+	btnUpdates := startMenu.URL("📢 Updates", "https://t.me/+YlKQr0JR-Uo2NTBk")
 	startMenu.Inline(
 		startMenu.Row(btnGates, btnPricing),
 		startMenu.Row(btnHelp, btnUpdates),
