@@ -2370,7 +2370,7 @@ func runCheckoutForCard(shopURL, cardEntry, proxyURL string) (*CheckResult, erro
 				return result, nil
 			case "CAPTCHA_REQUIRED":
 				result.Status = StatusDeclined
-				result.StatusCode = errorCode
+				result.StatusCode = "CARD_DECLINED"
 				result.Error = fmt.Errorf("declined: %s", errorCode)
 				return result, result.Error
 			case "GENERIC_ERROR":
