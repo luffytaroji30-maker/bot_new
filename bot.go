@@ -22,14 +22,14 @@ import (
 
 // ──────────────────────── config ────────────────────────────────────
 
-const botToken = "8732914063:AAHKSC1R2OuwB_HwzaeM-DRiHWMYpyNomKE"
+const botToken = "8758783474:AAGJ1vDKtB_Y_7cdHNSVaI_qDrCtgxbNL0g"
 const usersFile = "users.json"
 const configFile = "botconfig.json"
 const sitesFile = "customsites.json"
 
 var adminIDs = map[int64]bool{
-	5733576801: true,
-	6466522004: true,
+	8497942639: true,
+
 }
 
 // cfg is package-level so isAdmin and handlers can access it.
